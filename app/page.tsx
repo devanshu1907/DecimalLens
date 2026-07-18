@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { 
   Upload, 
@@ -56,6 +56,7 @@ interface ForecasterResponse {
 interface AuditSession {
   id: string;
   fileName: string;
+  storedFileName: string | null;  // UUID-prefixed server-side name for /api/document/
   timestamp: string;
   parsedText: string;
   lowConfidence: boolean;
@@ -164,6 +165,10 @@ const ForecastSkeleton = () => {
 export default function Page() {
   const [activeAgent, setActiveAgent] = useState<"auditor" | "forecaster">("auditor");
   const [fileName, setFileName] = useState<string | null>(null);
+  // storedFileName is the UUID-prefixed server-side name returned by /api/upload.
+  // Used for the PdfViewer URL so same-filename uploads from different users
+  // never collide. null for sample/text files that were never uploaded.
+  const [storedFileName, setStoredFileName] = useState<string | null>(null);
   const [selectedClaimId, setSelectedClaimId] = useState<string | null>(null);
   const [isFlashing, setIsFlashing] = useState<string | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -204,8 +209,11 @@ export default function Page() {
   const [claimsSorting, setClaimsSorting] = useState<SortingState>([]);
   const [projectionSorting, setProjectionSorting] = useState<SortingState>([]);
 
-  const claimColumnHelper = createColumnHelper<Claim>();
-  const claimsColumns = [
+  // Column definitions are memoized with empty deps because they are pure
+  // static renderers — they never close over component state or callbacks.
+  // Without memoization, createColumnHelper + the array literal run on every render.
+  const claimColumnHelper = useMemo(() => createColumnHelper<Claim>(), []);
+  const claimsColumns = useMemo(() => [
     claimColumnHelper.accessor("id", {
       header: "ID",
       cell: (info) => (
@@ -255,7 +263,8 @@ export default function Page() {
         </span>
       ),
     }),
-  ];
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  ], [claimColumnHelper]);
 
   const claimsTable = useReactTable({
     data: extractedClaims,
@@ -275,8 +284,8 @@ export default function Page() {
     risk_weight: string;
   }
 
-  const projectionColumnHelper = createColumnHelper<ProjectionRow>();
-  const projectionColumns = [
+  const projectionColumnHelper = useMemo(() => createColumnHelper<ProjectionRow>(), []);
+  const projectionColumns = useMemo(() => [
     projectionColumnHelper.accessor("year", {
       header: "Fiscal Year",
       cell: (info) => <span className="font-sans font-medium text-text-primary">{info.getValue()}</span>,
@@ -309,7 +318,8 @@ export default function Page() {
         );
       },
     }),
-  ];
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  ], [projectionColumnHelper]);
 
   const projectionsTable = useReactTable({
     data: forecasterResponse?.projections || [],
@@ -336,11 +346,19 @@ export default function Page() {
 
   const saveSession = (claims: Claim[], forecast: ForecasterResponse | null) => {
     if (!fileName || !parsedText) return;
+    // Sanitize filename before embedding in the session ID — a raw filename
+    // like `><script>alert(1)</script>.pdf` could inject markup if the ID
+    // is ever rendered unescaped.
+    const safeId = fileName.replace(/[^a-zA-Z0-9._-]/g, "_") + "_" + Date.now();
     const newSession: AuditSession = {
-      id: fileName + "_" + Date.now(),
+      id: safeId,
       fileName,
+      storedFileName: storedFileName ?? null,
       timestamp: new Date().toLocaleString(),
-      parsedText,
+      // Truncate to 8 KB max.  Storing the full parsed text causes
+      // QuotaExceededError for large uploads (≥25 MB) because localStorage
+      // is typically capped at 5–10 MB per origin.
+      parsedText: parsedText.slice(0, 8192),
       lowConfidence,
       extractedClaims: claims,
       forecasterResponse: forecast
@@ -352,7 +370,15 @@ export default function Page() {
       localStorage.setItem("decimallens_sessions", JSON.stringify(updated));
       setRecentSessions(updated);
     } catch (e) {
-      console.error("Failed to save session", e);
+      if (e instanceof DOMException && e.name === "QuotaExceededError") {
+        // Show a user-facing warning instead of silently swallowing the error
+        setErrorMsg(
+          "Session history could not be saved: browser storage is full. " +
+          "Clear history or delete browser data to free space."
+        );
+      } else {
+        console.error("Failed to save session", e);
+      }
     }
   };
 
@@ -532,6 +558,16 @@ export default function Page() {
       
       const verifyData = await verifyRes.json();
       const claim = extractedClaims.find((c) => c.id === selectedClaimId);
+
+      // Guard: if the user is editing (not adding) but the claim was removed
+      // while the form was open, bail out gracefully instead of crashing on claim!.id
+      if (!isAddingClaim && !claim) {
+        alert("The claim you were editing no longer exists. Please try again.");
+        setIsEditingClaim(false);
+        setIsAnalyzing(false);
+        setStatusText("");
+        return;
+      }
       
       const updatedClaim: Claim = {
         id: isAddingClaim ? `claim-custom-${Date.now()}` : claim!.id,
@@ -584,7 +620,15 @@ export default function Page() {
     }
     
     // Auto-trigger re-forecast
-    await runForecastStream(nextClaims);
+    try {
+      await runForecastStream(nextClaims);
+    } catch (err) {
+      // runForecastStream has its own internal try/catch but if the fetch
+      // itself throws (network down), we must still recover the UI state.
+      setErrorMsg((err as Error).message || "Forecast failed after deletion.");
+      setIsAnalyzing(false);
+      setStatusText("");
+    }
   };
 
   // Command + K / Ctrl + K palette shortcut
@@ -626,6 +670,7 @@ export default function Page() {
 
   const handleLoadSample = async () => {
     setFileName("SEC_Filing_Q4_2025_Draft.txt");
+    setStoredFileName(null);  // sample is not a server-stored PDF
     setParsedText(SAMPLE_FILING_TEXT);
     setLowConfidence(false);
     setExtractedClaims([]);
@@ -651,6 +696,7 @@ export default function Page() {
     if (!file) return;
 
     setFileName(file.name);
+    setStoredFileName(null); // will be set once upload response arrives
     setIsAnalyzing(true);
     setStatusText("Ingesting and parsing document...");
     setParsedText(null);
@@ -677,6 +723,9 @@ export default function Page() {
       }
 
       const uploadData = await uploadRes.json();
+      // stored_filename is the UUID-prefixed server-side path; use it for
+      // /api/document/ requests so collisions between concurrent uploads are impossible.
+      setStoredFileName(uploadData.stored_filename ?? null);
       setParsedText(uploadData.text);
       setLowConfidence(uploadData.low_confidence);
 
@@ -802,7 +851,10 @@ export default function Page() {
     c.reported.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  const renderParsedText = () => {
+  // useMemo so the O(n) indexOf search over the full parsedText only runs
+  // when parsedText, the active citation, or the flash state actually changes —
+  // not on every keystroke or unrelated state update.
+  const renderedParsedText = useMemo(() => {
     if (!parsedText) return null;
     const citation = activeClaim?.context;
     
@@ -813,8 +865,12 @@ export default function Page() {
         </pre>
       );
     }
-    
-    const citationLower = citation.toLowerCase().trim();
+
+    // Trim the citation before searching so leading/trailing whitespace in the
+    // LLM-returned context string doesn’t shift the match index.  Use the
+    // trimmed length when slicing parsedText so before/match/after are correct.
+    const citationTrimmed = citation.trim();
+    const citationLower = citationTrimmed.toLowerCase();
     const parsedTextLower = parsedText.toLowerCase();
     const index = parsedTextLower.indexOf(citationLower);
     
@@ -825,10 +881,13 @@ export default function Page() {
         </pre>
       );
     }
-    
+
+    // Use citationTrimmed.length (not citation.length) so the slice boundaries
+    // align with what we actually found in parsedText.
+    const matchLen = citationTrimmed.length;
     const before = parsedText.substring(0, index);
-    const match = parsedText.substring(index, index + citation.length);
-    const after = parsedText.substring(index + citation.length);
+    const match = parsedText.substring(index, index + matchLen);
+    const after = parsedText.substring(index + matchLen);
     
     return (
       <pre className="whitespace-pre-wrap font-mono text-[11px] text-slate-800 leading-relaxed max-w-full">
@@ -844,7 +903,7 @@ export default function Page() {
         {after}
       </pre>
     );
-  };
+  }, [parsedText, activeClaim, isFlashing]);
 
   return (
     <>
@@ -914,6 +973,7 @@ export default function Page() {
               <button
                 onClick={() => {
                   setFileName(null);
+                  setStoredFileName(null);
                   setParsedText(null);
                   setExtractedClaims([]);
                   setForecasterResponse(null);
@@ -1004,6 +1064,7 @@ export default function Page() {
                           key={session.id}
                           onClick={() => {
                             setFileName(session.fileName);
+                            setStoredFileName(session.storedFileName ?? null);
                             setParsedText(session.parsedText);
                             setLowConfidence(session.lowConfidence);
                             setExtractedClaims(session.extractedClaims);
@@ -1053,7 +1114,7 @@ export default function Page() {
                   </div>
                 ) : (
                   <PdfViewer
-                    url={`/api/document/${fileName}`}
+                    url={`/api/document/${storedFileName ?? fileName}`}
                     currentPage={currentPage}
                     onPageChange={(page) => setCurrentPage(page)}
                   />
@@ -1104,7 +1165,7 @@ export default function Page() {
                     <span className="text-xs text-text-secondary font-mono">{statusText}</span>
                   </div>
                 ) : (
-                  renderParsedText()
+                  renderedParsedText
                 )}
 
                 {/* Floating active claim indicator */}

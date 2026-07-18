@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { Document, Page, pdfjs } from "react-pdf";
 import { ChevronLeft, ChevronRight, Loader2, ZoomIn, ZoomOut } from "lucide-react";
 
@@ -8,8 +8,9 @@ import { ChevronLeft, ChevronRight, Loader2, ZoomIn, ZoomOut } from "lucide-reac
 import "react-pdf/dist/Page/AnnotationLayer.css";
 import "react-pdf/dist/Page/TextLayer.css";
 
-// Configure worker (use stable unpkg CDN)
-pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
+// Configure worker: served from /public to avoid CDN supply-chain risk.
+// Run `node -e "require('fs').copyFileSync(require.resolve('pdfjs-dist/build/pdf.worker.min.mjs'), 'public/pdf.worker.min.mjs')"` after install.
+pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
 
 interface PdfViewerProps {
   url: string;
@@ -22,12 +23,15 @@ export default function PdfViewer({ url, currentPage, onPageChange }: PdfViewerP
   const [pageNumber, setPageNumber] = useState<number>(currentPage || 1);
   const [scale, setScale] = useState<number>(1.0);
 
-  const [prevCurrentPage, setPrevCurrentPage] = useState<number>(currentPage);
-
-  if (currentPage !== prevCurrentPage) {
-    setPageNumber(currentPage);
-    setPrevCurrentPage(currentPage);
-  }
+  // Sync external currentPage prop changes via effect instead of during render.
+  // Calling setState directly in the render body is an anti-pattern that can
+  // trigger infinite re-renders in React Strict Mode.
+  useEffect(() => {
+    if (currentPage !== pageNumber) {
+      setPageNumber(currentPage);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentPage]);
 
   function onDocumentLoadSuccess({ numPages }: { numPages: number }) {
     setNumPages(numPages);

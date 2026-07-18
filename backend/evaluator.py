@@ -3,6 +3,10 @@ import ast
 import operator
 from decimal import Decimal
 
+# Security limits for expression evaluation
+_MAX_EXPR_LEN = 512   # chars — prevents DoS via huge strings
+_MAX_AST_DEPTH = 50   # nodes — prevents deeply-nested bomb expressions
+
 def clean_numeric_value(val_str: str) -> Decimal:
     """
     Cleans a string representing a number (e.g., "$142,500,000" or "24.50%")
@@ -19,7 +23,19 @@ def safe_eval_expression(expr_str: str) -> Decimal:
     """
     Safely evaluates a basic arithmetic expression string containing numbers,
     +, -, *, /, using decimal.Decimal.
+
+    Security hardening:
+    - Length guard prevents DoS via enormous input strings.
+    - Strict character whitelist (digits, whitespace, +-*/., parens) blocks
+      any attempt to inject Python identifiers or calls before ast.parse.
+    - AST depth counter prevents exponentially-nested bomb expressions.
     """
+    # --- Length guard ---
+    if len(expr_str) > _MAX_EXPR_LEN:
+        raise ValueError(
+            f"Expression is too long ({len(expr_str)} chars). Maximum is {_MAX_EXPR_LEN}."
+        )
+
     # Remove dollar signs and commas
     clean_expr = expr_str.replace('$', '').replace(',', '').strip()
     
@@ -29,9 +45,17 @@ def safe_eval_expression(expr_str: str) -> Decimal:
         return str(Decimal(val) / Decimal('100'))
     
     clean_expr = re.sub(r'(\d+(?:\.\d+)?)%', replace_percent, clean_expr)
+
+    # --- Strict character whitelist ---
+    # Only allow digits, whitespace, the four arithmetic operators, parentheses,
+    # and decimal points.  Any other character is rejected before ast.parse.
+    if not re.fullmatch(r'[\d\s\+\-\*\/\.\(\)]+', clean_expr):
+        raise ValueError(
+            f"Expression contains disallowed characters: {clean_expr!r}"
+        )
     
     # Supported operators mapping
-    operators = {
+    _operators = {
         ast.Add: operator.add,
         ast.Sub: operator.sub,
         ast.Mult: operator.mul,
@@ -39,26 +63,34 @@ def safe_eval_expression(expr_str: str) -> Decimal:
         ast.USub: operator.neg,
     }
     
-    def eval_node(node):
+    def eval_node(node, depth: int = 0) -> Decimal:
+        # --- Depth guard ---
+        if depth > _MAX_AST_DEPTH:
+            raise ValueError(
+                f"Expression is too deeply nested (max depth {_MAX_AST_DEPTH})."
+            )
         if hasattr(ast, 'Num') and isinstance(node, ast.Num):  # Python < 3.8
             return Decimal(str(node.n))
         elif isinstance(node, ast.Constant):  # Python >= 3.8
             return Decimal(str(node.value))
         elif isinstance(node, ast.BinOp):
-            left = eval_node(node.left)
-            right = eval_node(node.right)
+            left = eval_node(node.left, depth + 1)
+            right = eval_node(node.right, depth + 1)
             op = type(node.op)
-            if op in operators:
-                return operators[op](left, right)
+            if op in _operators:
+                # Guard against division by zero explicitly
+                if op is ast.Div and right == Decimal('0'):
+                    raise ValueError("Division by zero in expression")
+                return _operators[op](left, right)
             raise ValueError(f"Unsupported operator: {op}")
         elif isinstance(node, ast.UnaryOp):
-            operand = eval_node(node.operand)
+            operand = eval_node(node.operand, depth + 1)
             op = type(node.op)
-            if op in operators:
-                return operators[op](operand)
+            if op in _operators:
+                return _operators[op](operand)
             raise ValueError(f"Unsupported unary operator: {op}")
         else:
-            raise ValueError(f"Unsupported syntax: {type(node)}")
+            raise ValueError(f"Unsupported syntax node type: {type(node).__name__}")
             
     tree = ast.parse(clean_expr, mode='eval')
     return eval_node(tree.body)
@@ -95,8 +127,12 @@ def verify_claim(reported_str: str, expression_str: str) -> dict:
     else:
         decimal_places = 0
         
-    # Set quantizing step
-    quantize_step = Decimal('10.' + '0' * decimal_places) if decimal_places > 0 else Decimal('1.')
+    # Fix: use proper decimal quantization step.
+    # decimal_places=2 -> Decimal('0.01'), decimal_places=0 -> Decimal('1')
+    if decimal_places > 0:
+        quantize_step = Decimal('1e-' + str(decimal_places))
+    else:
+        quantize_step = Decimal('1')
     
     if is_percent:
         recalc_compare = (recalculated_val * 100).quantize(quantize_step)

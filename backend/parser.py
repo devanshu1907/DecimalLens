@@ -32,10 +32,12 @@ def check_malformed_text_tables(text: str) -> bool:
         if len(parts) >= 2 and num_values >= 1:
             table_block.append(len(parts))
         else:
-            if len(table_block) > 2:
-                if len(set(table_block)) > 1:
-                    return True
-                table_block = []
+            # Always reset the block when interrupted by a non-table line.
+            # Previously only reset when len > 2, which let stale column
+            # counts from short blocks bleed into the next table block.
+            if len(table_block) > 2 and len(set(table_block)) > 1:
+                return True
+            table_block = []
                 
     if len(table_block) > 2 and len(set(table_block)) > 1:
         return True

@@ -1,7 +1,7 @@
 import os
 import json
-import time
-from openai import OpenAI
+import asyncio
+from openai import AsyncOpenAI
 
 # Initialize client using Groq compatible base URL
 def get_groq_client():
@@ -12,7 +12,9 @@ def get_groq_client():
     key = key.strip("'\"")
     if not key.startswith("gsk_"):
         return None
-    return OpenAI(
+    # AsyncOpenAI so every .create() call can be properly awaited
+    # inside async FastAPI generator routes without blocking the event loop.
+    return AsyncOpenAI(
         api_key=key,
         base_url="https://api.groq.com/openai/v1"
     )
@@ -148,13 +150,15 @@ MOCK_FORECASTER_OUTPUT = {
   "risk_assessment": "The Forecaster Agent has intercepted unverified math assertions for Operating Income (Claim 3) and Operating Margin (Claim 4). Downstream financial models have been adjusted to reflect high risk. Operating Income calculations have been adjusted down by 0.9% to account for structural reporting errors identified in the initial filing."
 }
 
-def simulate_streaming_text(data_dict: dict):
+async def simulate_streaming_text(data_dict: dict):
     """
-    Simulates a character-by-character or word-by-word streaming stream from a dict,
-    mimicking LLM latency.
+    Async generator that simulates word-by-word LLM streaming from a dict.
+    Uses asyncio.sleep so the event loop is never blocked between chunks.
+    Chunk size is 64 bytes — large enough to feel responsive but fast enough
+    that even a 32 KB JSON completes in well under 10 seconds.
     """
     json_str = json.dumps(data_dict, indent=2)
-    chunk_size = 8
+    chunk_size = 64
     for i in range(0, len(json_str), chunk_size):
         yield json_str[i:i+chunk_size]
-        time.sleep(0.015)
+        await asyncio.sleep(0.015)
