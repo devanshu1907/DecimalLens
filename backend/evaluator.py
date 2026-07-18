@@ -590,7 +590,7 @@ def verify_claim(reported_str: str, expression_str: str) -> dict:
     if is_percent and _is_ratio_expression(expression_str):
         # Percentage with division: use error-propagation tolerance
         # The tolerance is in the ratio's own units (0.xxxx), not in percent
-        tolerance = _ratio_tolerance(expression_str, decimal_places)
+        tolerance = _ratio_tolerance(expression_str, decimal_places + 2)
     else:
         # Currency / additive: N-scaled HULP
         if is_percent:

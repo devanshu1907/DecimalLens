@@ -35,8 +35,9 @@ def test_upload():
     print("[OK] /api/upload endpoint is working perfectly!")
     return res_json["text"]
 
-def test_analyze(parsed_text):
+def test_analyze():
     print("Testing /api/analyze SSE stream...")
+    parsed_text = test_upload()
     # Payload
     payload = json.dumps({
         "text": parsed_text,
@@ -93,6 +94,6 @@ def test_analyze(parsed_text):
 
 if __name__ == "__main__":
     time.sleep(1) # wait for server initialization
-    parsed_text = test_upload()
-    test_analyze(parsed_text)
+    test_analyze()
     print("All endpoint verification checks passed successfully!")
+
