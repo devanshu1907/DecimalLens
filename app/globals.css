@@ -155,11 +155,12 @@
   background-color: var(--bg);
 }
 
-@media (max-width: 1024px) {
+@media (max-width: 767px) {
   .two-pane-container {
     grid-template-columns: 1fr;
-    height: auto;
-    overflow: auto;
+    height: calc(100vh - 6.25rem); /* 3.5rem header + 2.75rem switcher */
+    min-height: 0;
+    overflow: hidden;
   }
 }
 

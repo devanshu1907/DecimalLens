@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { Document, Page, pdfjs } from "react-pdf";
 import { ChevronLeft, ChevronRight, Loader2, ZoomIn, ZoomOut } from "lucide-react";
 
@@ -23,6 +23,22 @@ export default function PdfViewer({ url, currentPage, onPageChange, highlightTex
   const [numPages, setNumPages] = useState<number | null>(null);
   const [pageNumber, setPageNumber] = useState<number>(currentPage || 1);
   const [scale, setScale] = useState<number>(1.0);
+
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [containerWidth, setContainerWidth] = useState<number | undefined>(undefined);
+
+  useEffect(() => {
+    if (!containerRef.current) return;
+    const observer = new ResizeObserver((entries) => {
+      if (entries[0]) {
+        // Leave some margin for padding (p-4 is 16px on each side, total 32px) and border (2px)
+        const width = entries[0].contentRect.width - 36;
+        setContainerWidth(width > 0 ? width : undefined);
+      }
+    });
+    observer.observe(containerRef.current);
+    return () => observer.disconnect();
+  }, []);
 
   // Sync external currentPage prop changes via effect instead of during render.
   useEffect(() => {
@@ -136,7 +152,10 @@ export default function PdfViewer({ url, currentPage, onPageChange, highlightTex
       </div>
 
       {/* PDF Container */}
-      <div className="flex-1 w-full overflow-auto flex justify-center p-4 bg-bg min-h-0">
+      <div 
+        ref={containerRef}
+        className="flex-1 w-full overflow-auto flex justify-center p-4 bg-bg min-h-0"
+      >
         <div className="bg-panel border border-border shadow-md rounded-md overflow-hidden h-fit transition-transform duration-150 ease-out">
           <Document
             file={url}
@@ -157,6 +176,7 @@ export default function PdfViewer({ url, currentPage, onPageChange, highlightTex
               key={`${pageNumber}_${highlightText || ""}`}
               pageNumber={pageNumber}
               scale={scale}
+              width={containerWidth}
               renderAnnotationLayer={true}
               renderTextLayer={true}
               customTextRenderer={textRenderer}

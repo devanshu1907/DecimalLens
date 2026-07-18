@@ -18,12 +18,15 @@ import {
   ChevronRight,
   ZoomIn,
   ZoomOut,
-  Loader2
+  Loader2,
+  Download,
+  Printer
 } from "lucide-react";
 import nextDynamic from "next/dynamic";
 
 import { ThemeProvider } from "@/components/ThemeProviderClient";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import { cn } from "@/lib/utils";
 
 const PdfViewer = nextDynamic(() => import("../components/PdfViewer"), {
   ssr: false,
@@ -222,7 +225,7 @@ const TextDocumentViewer = ({
     const citation = activeClaim?.context;
     if (!citation || activeClaim?.page !== (pageIndex + 1)) {
       return (
-        <pre className="whitespace-pre-wrap font-mono text-[11px] text-slate-800 leading-relaxed max-w-full">
+        <pre className="whitespace-pre-wrap font-mono text-slate-800 leading-relaxed max-w-full">
           {currentPageText}
         </pre>
       );
@@ -235,7 +238,7 @@ const TextDocumentViewer = ({
     
     if (index === -1) {
       return (
-        <pre className="whitespace-pre-wrap font-mono text-[11px] text-slate-800 leading-relaxed max-w-full">
+        <pre className="whitespace-pre-wrap font-mono text-slate-800 leading-relaxed max-w-full">
           {currentPageText}
         </pre>
       );
@@ -247,7 +250,7 @@ const TextDocumentViewer = ({
     const after = currentPageText.substring(index + matchLen);
     
     return (
-      <pre className="whitespace-pre-wrap font-mono text-[11px] text-slate-800 leading-relaxed max-w-full">
+      <pre className="whitespace-pre-wrap font-mono text-slate-800 leading-relaxed max-w-full">
         {before}
         <span
           className={`bg-flagged-bg border-l-2 border-flagged font-bold px-1 py-0.5 rounded text-text-primary transition-all inline shadow-sm ${
@@ -314,10 +317,10 @@ const TextDocumentViewer = ({
       </div>
 
       {/* Page Container */}
-      <div className="flex-1 w-full overflow-auto flex justify-center p-6 bg-bg min-h-0">
+      <div className="flex-1 w-full overflow-auto flex justify-center p-4 sm:p-6 bg-bg min-h-0">
         <div 
-          className="bg-white text-slate-900 border border-slate-200 shadow-md rounded-md p-10 max-w-2xl w-full h-fit transition-transform duration-150 ease-out origin-top font-mono"
-          style={{ transform: `scale(${scale})` }}
+          className="bg-white text-slate-900 border border-slate-200 shadow-sm rounded-md p-4 sm:p-10 max-w-2xl w-full h-fit transition-all duration-150 ease-out font-mono"
+          style={{ fontSize: `${scale * 11}px` }}
         >
           <div className="border-b border-slate-200 pb-3 mb-6 flex justify-between items-center text-[9px] uppercase tracking-wider text-slate-400 font-sans">
             <span>{fileName}</span>
@@ -379,12 +382,12 @@ const CsvDocumentViewer = ({
       </div>
 
       {/* Sheet Container */}
-      <div className="flex-1 w-full overflow-auto flex justify-center p-6 bg-bg min-h-0">
+      <div className="flex-1 w-full overflow-auto flex justify-center p-4 sm:p-6 bg-bg min-h-0">
         <div 
-          className="bg-white text-slate-900 border border-slate-200 shadow-md rounded-md p-10 max-w-4xl w-full h-fit transition-transform duration-150 ease-out origin-top font-sans"
-          style={{ transform: `scale(${scale})` }}
+          className="bg-white text-slate-900 border border-slate-200 shadow-sm rounded-md p-4 sm:p-10 max-w-4xl w-full h-fit transition-all duration-150 ease-out font-sans"
+          style={{ fontSize: `${scale * 12}px` }}
         >
-          <div className="border-b border-slate-200 pb-3 mb-6 flex justify-between items-center text-[9px] uppercase tracking-wider text-slate-400 font-sans">
+          <div className="border-b border-slate-200 pb-3 mb-6 flex justify-between items-center text-[0.75em] uppercase tracking-wider text-slate-400 font-sans">
             <span>{fileName}</span>
             <span>Spreadsheet Ingestion View</span>
           </div>
@@ -393,7 +396,7 @@ const CsvDocumentViewer = ({
             {renderedCsvTable}
           </div>
           
-          <div className="border-t border-slate-100 pt-3 mt-6 flex justify-between items-center text-[9px] text-slate-400 font-sans">
+          <div className="border-t border-slate-100 pt-3 mt-6 flex justify-between items-center text-[0.75em] text-slate-400 font-sans">
             <span>DecimalLens Viewer</span>
             <span>1 Sheet | {parsedCsv?.length || 0} Rows</span>
           </div>
@@ -405,6 +408,7 @@ const CsvDocumentViewer = ({
 
 export default function Page() {
   const [activeAgent, setActiveAgent] = useState<"auditor" | "forecaster">("auditor");
+  const [mobileActiveTab, setMobileActiveTab] = useState<"document" | "insights">("document");
   const [fileName, setFileName] = useState<string | null>(null);
   // storedFileName is the UUID-prefixed server-side name returned by /api/upload.
   // Used for the PdfViewer URL so same-filename uploads from different users
@@ -1002,6 +1006,9 @@ export default function Page() {
       setCurrentPage(claim.page);
     }
 
+    // Auto-switch to the document tab on mobile/tablet so user sees the highlight
+    setMobileActiveTab("document");
+
     setTimeout(() => {
       setIsFlashing(null);
     }, 1000);
@@ -1313,7 +1320,7 @@ export default function Page() {
     
     return (
       <div className="w-full overflow-x-auto border border-border rounded-md bg-panel shadow-sm max-h-[500px]">
-        <table className="w-full border-collapse text-left text-xs font-sans">
+        <table className="w-full border-collapse text-left font-sans">
           <tbody>
             {parsedCsv.map((row, rowIndex) => {
               const rowText = row.join(" ").toLowerCase();
@@ -1341,8 +1348,8 @@ export default function Page() {
                   {row.map((cell, cellIndex) => (
                     <td 
                       key={cellIndex} 
-                      className={`p-3 whitespace-nowrap ${
-                        isHeader ? "text-[10px] uppercase tracking-wider font-semibold" : "text-[11.5px] font-mono"
+                      className={`p-2 sm:p-3 whitespace-nowrap ${
+                        isHeader ? "text-[0.85em] uppercase tracking-wider font-semibold" : "text-[1em] font-mono"
                       }`}
                     >
                       {cell}
@@ -1370,11 +1377,11 @@ export default function Page() {
       />
 
       {/* Premium Header */}
-      <header className="h-14 bg-panel border-b border-border flex items-center justify-between px-6 z-10">
-        <div className="flex items-center gap-3">
+      <header className="h-14 bg-panel border-b border-border flex items-center justify-between px-3 sm:px-6 z-10">
+        <div className="flex items-center gap-2 sm:gap-3">
           <Database className="w-5 h-5 text-accent-navy" />
-          <span className="font-semibold text-text-primary tracking-tight font-sans">DecimalLens</span>
-          <span className="text-[10px] uppercase font-mono bg-border px-1.5 py-0.5 rounded text-text-secondary tracking-widest">
+          <span className="font-semibold text-text-primary tracking-tight font-sans text-sm sm:text-base">DecimalLens</span>
+          <span className="hidden sm:inline-block text-[10px] uppercase font-mono bg-border px-1.5 py-0.5 rounded text-text-secondary tracking-widest">
             v5.0 Audit
           </span>
         </div>
@@ -1382,35 +1389,36 @@ export default function Page() {
         {/* Command Palette trigger */}
         <button 
           onClick={() => setSearchOpen(true)}
-          className="hidden md:flex items-center gap-2 border border-border bg-bg hover:bg-border/30 transition-all rounded-md px-3 py-1.5 text-xs text-text-secondary w-72 justify-between cursor-pointer"
+          className="hidden md:flex items-center gap-2 border border-border bg-bg hover:bg-border/30 transition-all rounded-md px-3 py-1.5 text-xs text-text-secondary w-40 lg:w-72 justify-between cursor-pointer"
         >
           <span className="flex items-center gap-2">
             <Search className="w-3.5 h-3.5" />
-            <span>Search claims and metrics...</span>
+            <span className="truncate">Search claims...</span>
           </span>
-          <kbd className="bg-panel px-1.5 py-0.5 border border-border rounded text-[10px] font-mono shadow-sm">
+          <kbd className="hidden lg:inline-block bg-panel px-1.5 py-0.5 border border-border rounded text-[10px] font-mono shadow-sm">
             ⌘K
           </kbd>
         </button>
 
         {/* File State Indicator */}
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-1.5 sm:gap-3">
           {fileName ? (
-            <div className="flex items-center gap-2">
-              <div className="flex items-center gap-2 bg-muted border border-border px-3 py-1 rounded-md text-xs font-medium text-text-primary">
-                <FileText className="w-3.5 h-3.5 text-accent-navy" />
-                <span className="font-mono text-[11px]">{fileName}</span>
+            <div className="flex items-center gap-1.5 sm:gap-2">
+              <div className="flex items-center gap-1.5 sm:gap-2 bg-muted border border-border px-2 sm:px-3 py-1 rounded-md text-xs font-medium text-text-primary max-w-[100px] xs:max-w-[150px] sm:max-w-[240px]">
+                <FileText className="w-3.5 h-3.5 text-accent-navy shrink-0" />
+                <span className="font-mono text-[11px] truncate">{fileName}</span>
               </div>
               
               {/* Export Findings Buttons */}
               {extractedClaims.length > 0 && (
-                <div className="flex items-center gap-1 bg-muted border border-border p-1 rounded-md">
+                <div className="flex items-center gap-0.5 sm:gap-1 bg-muted border border-border p-1 rounded-md">
                   <button
                     onClick={exportToCsv}
                     className="flex items-center gap-1 text-[10px] uppercase font-bold text-accent-navy hover:bg-border/30 px-2 py-1 rounded transition-all cursor-pointer font-sans"
                     title="Export verified claims and forecast projections to a CSV file"
                   >
-                    CSV
+                    <Download className="w-3.5 h-3.5 sm:w-3 sm:h-3" />
+                    <span className="hidden sm:inline">CSV</span>
                   </button>
                   <span className="w-px h-3.5 bg-border" />
                   <button
@@ -1418,7 +1426,8 @@ export default function Page() {
                     className="flex items-center gap-1 text-[10px] uppercase font-bold text-accent-navy hover:bg-border/30 px-2 py-1 rounded transition-all cursor-pointer font-sans"
                     title="Print report card or save as PDF"
                   >
-                    PDF / Print
+                    <Printer className="w-3.5 h-3.5 sm:w-3 sm:h-3" />
+                    <span className="hidden sm:inline">Print</span>
                   </button>
                 </div>
               )}
@@ -1435,7 +1444,7 @@ export default function Page() {
                   setErrorMsg("");
                   setSelectedClaimId(null);
                 }}
-                className="text-xs text-text-secondary hover:text-text-primary px-2.5 py-1 rounded border border-border bg-panel hover:bg-bg transition-all cursor-pointer"
+                className="text-xs text-text-secondary hover:text-text-primary px-2 sm:px-2.5 py-1 rounded border border-border bg-panel hover:bg-bg transition-all cursor-pointer"
               >
                 Clear
               </button>
@@ -1443,20 +1452,49 @@ export default function Page() {
           ) : (
             <button 
               onClick={() => fileInputRef.current?.click()}
-              className="flex items-center gap-2 bg-accent-navy text-white text-xs font-semibold px-4 py-1.5 rounded-md hover:bg-opacity-90 transition-all cursor-pointer shadow-sm"
+              className="flex items-center gap-1.5 sm:gap-2 bg-accent-navy text-white text-xs font-semibold px-3 sm:px-4 py-1.5 rounded-md hover:bg-opacity-90 transition-all cursor-pointer shadow-sm"
             >
               <Upload className="w-3.5 h-3.5" />
-              Upload Document
+              <span className="hidden xs:inline">Upload Document</span>
+              <span className="xs:hidden">Upload</span>
             </button>
           )}
           <ThemeToggle />
         </div>
       </header>
 
+      {/* Mobile/Tablet View Switcher */}
+      <div className="md:hidden h-11 bg-panel border-b border-border flex shrink-0 w-full select-none">
+        <button
+          onClick={() => setMobileActiveTab("document")}
+          className={cn(
+            "flex-1 text-xs font-semibold flex items-center justify-center gap-2 transition-all border-b-2 cursor-pointer",
+            mobileActiveTab === "document"
+              ? "border-accent-navy text-accent-navy bg-bg/10"
+              : "border-transparent text-text-secondary hover:text-text-primary"
+          )}
+        >
+          <FileText className="w-3.5 h-3.5" />
+          <span>Source Document</span>
+        </button>
+        <button
+          onClick={() => setMobileActiveTab("insights")}
+          className={cn(
+            "flex-1 text-xs font-semibold flex items-center justify-center gap-2 transition-all border-b-2 cursor-pointer",
+            mobileActiveTab === "insights"
+              ? "border-accent-navy text-accent-navy bg-bg/10"
+              : "border-transparent text-text-secondary hover:text-text-primary"
+          )}
+        >
+          <CheckCircle2 className="w-3.5 h-3.5 text-verified" />
+          <span>Audit Insights</span>
+        </button>
+      </div>
+
       {/* Main Two-Pane Layout Shell */}
       <div className="two-pane-container flex-1">
         {/* Left Pane: Source Filing Document Viewer */}
-        <div className="pane">
+        <div className={cn("pane", mobileActiveTab === "document" ? "flex" : "hidden md:flex")}>
           <div className="h-10 border-b border-border bg-panel flex items-center justify-between px-4">
             <span className="text-xs font-semibold text-text-primary font-sans">Source Document Viewer</span>
             {fileName && (
@@ -1615,18 +1653,18 @@ export default function Page() {
         </div>
 
         {/* Right Pane: Auditing & Analysis Insights */}
-        <div className="pane">
+        <div className={cn("pane", mobileActiveTab === "insights" ? "flex" : "hidden md:flex")}>
           {/* Agent Navigation Tabs */}
-          <div className="h-12 border-b border-border bg-bg flex items-center px-4 justify-between shrink-0">
+          <div className="h-12 border-b border-border bg-bg flex items-center px-2 sm:px-4 justify-between shrink-0">
             <div className="flex gap-1 bg-border/40 p-0.5 rounded-lg relative z-0">
               <button
                 onClick={() => setActiveAgent("auditor")}
-                className={`relative flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-md transition-colors cursor-pointer z-10 ${
+                className={`relative flex items-center gap-1 sm:gap-1.5 px-2 sm:px-3 py-1 sm:py-1.5 text-xs font-semibold rounded-md transition-colors cursor-pointer z-10 ${
                   activeAgent === "auditor" ? "text-accent-navy font-bold" : "text-text-secondary hover:text-text-primary"
                 }`}
               >
                 <CheckCircle2 className="w-3.5 h-3.5 text-verified" />
-                <span>Auditor Agent</span>
+                <span>Auditor</span>
                 {activeAgent === "auditor" && (
                   <motion.div
                     layoutId="activeAgentTab"
@@ -1637,12 +1675,12 @@ export default function Page() {
               </button>
               <button
                 onClick={() => setActiveAgent("forecaster")}
-                className={`relative flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-md transition-colors cursor-pointer z-10 ${
+                className={`relative flex items-center gap-1 sm:gap-1.5 px-2 sm:px-3 py-1 sm:py-1.5 text-xs font-semibold rounded-md transition-colors cursor-pointer z-10 ${
                   activeAgent === "forecaster" ? "text-accent-navy font-bold" : "text-text-secondary hover:text-text-primary"
                 }`}
               >
                 <Sparkles className="w-3.5 h-3.5 text-accent-navy" />
-                <span>Forecaster Agent</span>
+                <span>Forecaster</span>
                 {activeAgent === "forecaster" && (
                   <motion.div
                     layoutId="activeAgentTab"
@@ -1654,14 +1692,17 @@ export default function Page() {
             </div>
 
             {fileName && (
-              <span className="text-[10px] font-mono text-text-secondary bg-panel border border-border px-2 py-0.5 rounded">
-                Verified: {extractedClaims.filter(c => c.verified).length}/{extractedClaims.length} Claims
+              <span className="text-[10px] font-mono text-text-secondary bg-panel border border-border px-1.5 sm:px-2 py-0.5 rounded">
+                <span className="hidden xs:inline">Verified: </span>
+                {extractedClaims.filter(c => c.verified).length}/{extractedClaims.length}
+                <span className="hidden xs:inline"> Claims</span>
+                <span className="xs:hidden"> OK</span>
               </span>
             )}
           </div>
 
           {/* Insights Display Container */}
-          <div className="flex-1 p-6 overflow-y-auto">
+          <div className="flex-1 p-4 sm:p-6 overflow-y-auto">
             {errorMsg && (
               <div className="mb-4 border border-red-200 bg-red-50 text-red-700 p-4 rounded-md text-xs flex justify-between items-start">
                 <div className="flex gap-2">
@@ -1753,21 +1794,28 @@ export default function Page() {
                               <thead>
                                 {claimsTable.getHeaderGroups().map(headerGroup => (
                                   <tr key={headerGroup.id} className="bg-bg border-b border-border">
-                                    {headerGroup.headers.map(header => (
-                                      <th 
-                                        key={header.id} 
-                                        onClick={header.column.getToggleSortingHandler()}
-                                        className="p-3 text-[10px] uppercase font-bold text-text-secondary tracking-wider cursor-pointer hover:bg-border/30 transition-all select-none"
-                                      >
-                                        <div className="flex items-center gap-1">
-                                          {flexRender(header.column.columnDef.header, header.getContext())}
-                                          {{
-                                            asc: ' ▴',
-                                            desc: ' ▾',
-                                          }[header.column.getIsSorted() as string] ?? null}
-                                        </div>
-                                      </th>
-                                    ))}
+                                    {headerGroup.headers.map(header => {
+                                      const columnId = header.column.id;
+                                      const isIdOrPage = columnId === "id" || columnId === "page";
+                                      return (
+                                        <th 
+                                          key={header.id} 
+                                          onClick={header.column.getToggleSortingHandler()}
+                                          className={cn(
+                                            "p-2 sm:p-3 text-[10px] uppercase font-bold text-text-secondary tracking-wider cursor-pointer hover:bg-border/30 transition-all select-none",
+                                            isIdOrPage && "hidden sm:table-cell"
+                                          )}
+                                        >
+                                          <div className="flex items-center gap-1">
+                                            {flexRender(header.column.columnDef.header, header.getContext())}
+                                            {{
+                                              asc: ' ▴',
+                                              desc: ' ▾',
+                                            }[header.column.getIsSorted() as string] ?? null}
+                                          </div>
+                                        </th>
+                                      );
+                                    })}
                                   </tr>
                                 ))}
                               </thead>
@@ -1786,11 +1834,21 @@ export default function Page() {
                                             : "bg-flagged-bg/5 hover:bg-flagged-bg/10"
                                       }`}
                                     >
-                                      {row.getVisibleCells().map(cell => (
-                                        <td key={cell.id} className="p-3 max-w-[200px] truncate">
-                                          {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                                        </td>
-                                      ))}
+                                      {row.getVisibleCells().map(cell => {
+                                        const columnId = cell.column.id;
+                                        const isIdOrPage = columnId === "id" || columnId === "page";
+                                        return (
+                                          <td 
+                                            key={cell.id} 
+                                            className={cn(
+                                              "p-2 sm:p-3 max-w-[200px] truncate",
+                                              isIdOrPage && "hidden sm:table-cell"
+                                            )}
+                                          >
+                                            {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                                          </td>
+                                        );
+                                      })}
                                     </tr>
                                   );
                                 })}
@@ -2202,32 +2260,47 @@ export default function Page() {
                                  <thead>
                                    {projectionsTable.getHeaderGroups().map(headerGroup => (
                                      <tr key={headerGroup.id} className="bg-bg border-b border-border">
-                                       {headerGroup.headers.map(header => (
-                                         <th 
-                                           key={header.id}
-                                           onClick={header.column.getToggleSortingHandler()}
-                                           className="p-3 text-[10px] uppercase font-bold text-text-secondary tracking-wider cursor-pointer hover:bg-border/30 transition-all select-none"
-                                         >
-                                           <div className="flex items-center gap-1">
-                                             {flexRender(header.column.columnDef.header, header.getContext())}
-                                             {{
-                                               asc: ' ▴',
-                                               desc: ' ▾',
-                                             }[header.column.getIsSorted() as string] ?? null}
-                                           </div>
-                                         </th>
-                                       ))}
+                                       {headerGroup.headers.map(header => {
+                                         const isRiskWeight = header.column.id === "risk_weight";
+                                         return (
+                                           <th 
+                                             key={header.id}
+                                             onClick={header.column.getToggleSortingHandler()}
+                                             className={cn(
+                                               "p-2 sm:p-3 text-[10px] uppercase font-bold text-text-secondary tracking-wider cursor-pointer hover:bg-border/30 transition-all select-none",
+                                               isRiskWeight && "hidden sm:table-cell"
+                                             )}
+                                           >
+                                             <div className="flex items-center gap-1">
+                                               {flexRender(header.column.columnDef.header, header.getContext())}
+                                               {{
+                                                 asc: ' ▴',
+                                                 desc: ' ▾',
+                                               }[header.column.getIsSorted() as string] ?? null}
+                                             </div>
+                                           </th>
+                                         );
+                                       })}
                                      </tr>
                                    ))}
                                  </thead>
                                  <tbody className="divide-y divide-border/60">
                                    {projectionsTable.getRowModel().rows.map(row => (
                                      <tr key={row.id} className="hover:bg-bg/20 transition-all">
-                                       {row.getVisibleCells().map(cell => (
-                                         <td key={cell.id} className="p-3">
-                                           {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                                         </td>
-                                       ))}
+                                       {row.getVisibleCells().map(cell => {
+                                         const isRiskWeight = cell.column.id === "risk_weight";
+                                         return (
+                                           <td 
+                                             key={cell.id} 
+                                             className={cn(
+                                               "p-2 sm:p-3",
+                                               isRiskWeight && "hidden sm:table-cell"
+                                             )}
+                                           >
+                                             {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                                           </td>
+                                         );
+                                       })}
                                      </tr>
                                    ))}
                                  </tbody>
