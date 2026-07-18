@@ -1,0 +1,11 @@
+node_modules
+.next
+.git
+.gitignore
+.dockerignore
+backend/venv
+backend/__pycache__
+backend/uploads
+.agents
+.vscode
+*.log
