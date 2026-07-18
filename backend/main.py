@@ -264,6 +264,104 @@ async def generate_analysis_stream(text: str, low_confidence: bool):
         except Exception as e:
             yield f"event: error\ndata: {json.dumps({'message': f'Groq API error: {str(e)}'})}\n\n"
 
+
+class VerifyClaimRequest(BaseModel):
+    reported: str
+    expression: str
+
+class ForecastRequest(BaseModel):
+    claims: list
+    low_confidence_baseline: bool = False
+
+async def generate_forecast_stream(claims: list, low_confidence_baseline: bool):
+    import copy
+    client = get_groq_client()
+    
+    if client is None:
+        print("GROQ_API_KEY not configured or placeholder detected. Running in offline mock mode.")
+        mock_forecaster = copy.deepcopy(MOCK_FORECASTER_OUTPUT)
+        
+        # Adjust confidence level if all claims happen to be verified
+        if all(c.get("verified", False) for c in claims) and not low_confidence_baseline:
+            mock_forecaster["confidence"] = "High"
+            mock_forecaster["risk_assessment"] = "All calculations are verified and clean."
+            projections = []
+            for p in mock_forecaster["projections"]:
+                projections.append({
+                    "year": p["year"],
+                    "projected_revenue": p["projected_revenue"],
+                    "projected_operating_income": p["projected_operating_income"].replace("*", ""),
+                    "risk_weight": "Low Risk"
+                })
+            mock_forecaster["projections"] = projections
+        else:
+            mock_forecaster["confidence"] = "Low"
+            if low_confidence_baseline:
+                mock_forecaster["risk_assessment"] += " Layout parsing warning was flagged due to malformed tables in the source document."
+                
+        yield f"event: status\ndata: {json.dumps({'status': 'Forecasting projections (Mock Mode)...'})}\n\n"
+        
+        for chunk in simulate_streaming_text(mock_forecaster):
+            yield f"event: forecaster_chunk\ndata: {json.dumps({'chunk': chunk})}\n\n"
+            await asyncio.sleep(0.001)
+            
+        yield f"event: done\ndata: {json.dumps({'forecaster_response': mock_forecaster})}\n\n"
+        
+    else:
+        try:
+            yield f"event: status\ndata: {json.dumps({'status': 'Forecasting projections...'})}\n\n"
+            
+            forecaster_input = {
+                "claims": claims,
+                "low_confidence_baseline": low_confidence_baseline
+            }
+            
+            response = client.chat.completions.create(
+                model=DEFAULT_MODEL,
+                messages=[
+                    {"role": "system", "content": FORECASTER_SYSTEM_PROMPT},
+                    {"role": "user", "content": f"Here is the verified financial data from the Auditor:\n\n{json.dumps(forecaster_input, indent=2)}"}
+                ],
+                response_format={"type": "json_object"},
+                stream=True
+            )
+            
+            forecaster_full_response = ""
+            for chunk in response:
+                content = chunk.choices[0].delta.content
+                if content:
+                    yield f"event: forecaster_chunk\ndata: {json.dumps({'chunk': content})}\n\n"
+                    forecaster_full_response += content
+                await asyncio.sleep(0.001)
+                
+            try:
+                forecaster_data = json.loads(forecaster_full_response)
+            except Exception:
+                forecaster_data = {"error": "Failed to parse Forecaster JSON response"}
+                
+            yield f"event: done\ndata: {json.dumps({'forecaster_response': forecaster_data})}\n\n"
+            
+        except Exception as e:
+            yield f"event: error\ndata: {json.dumps({'message': f'Groq API error: {str(e)}'})}\n\n"
+
+@app.post("/api/verify-claim")
+async def verify_claim_endpoint(request: VerifyClaimRequest):
+    """
+    Deterministically verifies the math behind a single claim.
+    """
+    res = verify_claim(request.reported, request.expression)
+    return res
+
+@app.post("/api/forecast")
+async def forecast_endpoint(request: ForecastRequest):
+    """
+    Streams growth projections based on an input list of verified claims.
+    """
+    return StreamingResponse(
+        generate_forecast_stream(request.claims, request.low_confidence_baseline),
+        media_type="text/event-stream"
+    )
+
 @app.post("/api/analyze")
 async def analyze_document(request: AnalyzeRequest):
     """
@@ -273,3 +371,4 @@ async def analyze_document(request: AnalyzeRequest):
         generate_analysis_stream(request.text, request.low_confidence),
         media_type="text/event-stream"
     )
+

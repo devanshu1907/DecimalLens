@@ -10,7 +10,8 @@ import {
   Search, 
   Sparkles, 
   Info,
-  Database
+  Database,
+  History
 } from "lucide-react";
 import dynamic from "next/dynamic";
 
@@ -34,6 +35,7 @@ interface Claim {
   reported: string;
   recalculated: string;
   formula: string;
+  expression: string;
   verified: boolean;
   page: number;
   context: string;
@@ -50,6 +52,17 @@ interface ForecasterResponse {
     risk_weight: string;
   }[];
 }
+
+interface AuditSession {
+  id: string;
+  fileName: string;
+  timestamp: string;
+  parsedText: string;
+  lowConfidence: boolean;
+  extractedClaims: Claim[];
+  forecasterResponse: ForecasterResponse | null;
+}
+
 
 const SAMPLE_FILING_TEXT = `DECIMALLENS INC.
 FORM 10-Q | PART I - FINANCIAL INFORMATION
@@ -118,8 +131,21 @@ export default function Page() {
   const [showRawAuditor, setShowRawAuditor] = useState(false);
   const [showRawForecaster, setShowRawForecaster] = useState(false);
 
+  // Phase 4 States
+  const [recentSessions, setRecentSessions] = useState<AuditSession[]>([]);
+  const [isEditingClaim, setIsEditingClaim] = useState(false);
+  const [isAddingClaim, setIsAddingClaim] = useState(false);
+  const [editMetric, setEditMetric] = useState("");
+  const [editReported, setEditReported] = useState("");
+  const [editFormula, setEditFormula] = useState("");
+  const [editExpression, setEditExpression] = useState("");
+  const [editPage, setEditPage] = useState<number>(1);
+  const [editContext, setEditContext] = useState("");
+
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const highlightRef = useRef<HTMLSpanElement | null>(null);
+  const claimsRef = useRef<Claim[]>([]);
+
 
   // TanStack Table configurations
   const [claimsSorting, setClaimsSorting] = useState<SortingState>([]);
@@ -243,6 +269,219 @@ export default function Page() {
     getSortedRowModel: getSortedRowModel(),
   });
 
+  // Load sessions from localStorage
+  useEffect(() => {
+    try {
+      const existing = localStorage.getItem("decimallens_sessions");
+      if (existing) {
+        setRecentSessions(JSON.parse(existing));
+      }
+    } catch (e) {
+      console.error("Failed to load sessions", e);
+    }
+  }, []);
+
+  const saveSession = (claims: Claim[], forecast: ForecasterResponse | null) => {
+    if (!fileName || !parsedText) return;
+    const newSession: AuditSession = {
+      id: fileName + "_" + Date.now(),
+      fileName,
+      timestamp: new Date().toLocaleString(),
+      parsedText,
+      lowConfidence,
+      extractedClaims: claims,
+      forecasterResponse: forecast
+    };
+    try {
+      const existing = localStorage.getItem("decimallens_sessions");
+      const sessions: AuditSession[] = existing ? JSON.parse(existing) : [];
+      const updated = [newSession, ...sessions.filter(s => s.fileName !== fileName)].slice(0, 10);
+      localStorage.setItem("decimallens_sessions", JSON.stringify(updated));
+      setRecentSessions(updated);
+    } catch (e) {
+      console.error("Failed to save session", e);
+    }
+  };
+
+  const runForecastStream = async (claims: Claim[]) => {
+    if (claims.length === 0) {
+      setForecasterResponse(null);
+      setForecasterText("");
+      return;
+    }
+    
+    setIsAnalyzing(true);
+    setStatusText("Forecasting projections based on updated claims...");
+    setForecasterResponse(null);
+    setForecasterText("");
+    
+    try {
+      const response = await fetch("/api/forecast", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          claims,
+          low_confidence_baseline: lowConfidence
+        })
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Forecast request failed: ${response.statusText}`);
+      }
+      
+      if (!response.body) {
+        throw new Error("No response body received from forecast stream.");
+      }
+      
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder("utf-8");
+      let buffer = "";
+      
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        
+        buffer += decoder.decode(value, { stream: true });
+        
+        while (buffer.includes("\n\n")) {
+          const parts = buffer.split("\n\n");
+          const block = parts.shift() || "";
+          buffer = parts.join("\n\n");
+          
+          const lines = block.split("\n");
+          let eventType = "";
+          let eventData = "";
+          
+          for (const line of lines) {
+            if (line.startsWith("event:")) {
+              eventType = line.replace("event:", "").trim();
+            } else if (line.startsWith("data:")) {
+              eventData = line.replace("data:", "").trim();
+            }
+          }
+          
+          if (eventType && eventData) {
+            try {
+              const data = JSON.parse(eventData);
+              if (eventType === "status") {
+                setStatusText(data.status);
+              } else if (eventType === "forecaster_chunk") {
+                setForecasterText((prev) => prev + data.chunk);
+              } else if (eventType === "done") {
+                setForecasterResponse(data.forecaster_response);
+                // Save updated session
+                saveSession(claims, data.forecaster_response);
+              } else if (eventType === "error") {
+                setErrorMsg(data.message);
+              }
+            } catch (e) {
+              console.error("Failed to parse SSE event data:", e, eventData);
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.error(err);
+      setErrorMsg((err as Error).message || "Error running forecast stream.");
+    } finally {
+      setIsAnalyzing(false);
+      setStatusText("");
+    }
+  };
+
+  const handleStartEdit = () => {
+    const claim = extractedClaims.find((c) => c.id === selectedClaimId);
+    if (!claim) return;
+    setEditMetric(claim.metric);
+    setEditReported(claim.reported);
+    setEditFormula(claim.formula);
+    setEditExpression(claim.expression);
+    setEditPage(claim.page);
+    setEditContext(claim.context);
+    setIsEditingClaim(true);
+    setIsAddingClaim(false);
+  };
+
+  const handleSaveClaim = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editMetric || !editReported || !editExpression) {
+      alert("Metric, Reported Value, and Expression are required.");
+      return;
+    }
+    
+    setIsAnalyzing(true);
+    setStatusText("Verifying calculation math...");
+    try {
+      const verifyRes = await fetch("/api/verify-claim", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          reported: editReported,
+          expression: editExpression
+        })
+      });
+      
+      if (!verifyRes.ok) {
+        throw new Error(`Verification failed: ${verifyRes.statusText}`);
+      }
+      
+      const verifyData = await verifyRes.json();
+      const claim = extractedClaims.find((c) => c.id === selectedClaimId);
+      
+      const updatedClaim: Claim = {
+        id: isAddingClaim ? `claim-custom-${Date.now()}` : claim!.id,
+        metric: editMetric,
+        reported: editReported,
+        recalculated: verifyData.recalculated,
+        formula: editFormula,
+        expression: editExpression,
+        verified: verifyData.verified,
+        page: Number(editPage),
+        context: editContext,
+        reason: verifyData.reason || undefined
+      };
+      
+      let nextClaims: Claim[];
+      if (isAddingClaim) {
+        nextClaims = [...extractedClaims, updatedClaim];
+      } else {
+        nextClaims = extractedClaims.map(c => c.id === claim!.id ? updatedClaim : c);
+      }
+      
+      setExtractedClaims(nextClaims);
+      claimsRef.current = nextClaims;
+      setSelectedClaimId(updatedClaim.id);
+      setIsEditingClaim(false);
+      setIsAddingClaim(false);
+      
+      // Auto-trigger re-forecast
+      await runForecastStream(nextClaims);
+      
+    } catch (err) {
+      console.error(err);
+      alert((err as Error).message || "Failed to save claim.");
+      setIsAnalyzing(false);
+      setStatusText("");
+    }
+  };
+
+  const handleDeleteClaim = async (claimId: string) => {
+    if (!confirm("Are you sure you want to delete this claim?")) return;
+    
+    const nextClaims = extractedClaims.filter(c => c.id !== claimId);
+    setExtractedClaims(nextClaims);
+    claimsRef.current = nextClaims;
+    
+    if (nextClaims.length > 0) {
+      setSelectedClaimId(nextClaims[0].id);
+    } else {
+      setSelectedClaimId(null);
+    }
+    
+    // Auto-trigger re-forecast
+    await runForecastStream(nextClaims);
+  };
+
   // Command + K / Ctrl + K palette shortcut
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -254,6 +493,7 @@ export default function Page() {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
+
 
   // Scroll to highlight element when selected claim changes
   useEffect(() => {
@@ -424,6 +664,7 @@ export default function Page() {
           break;
         case "verified_claims":
           setExtractedClaims(data.claims);
+          claimsRef.current = data.claims;
           if (data.claims && data.claims.length > 0) {
             setSelectedClaimId(data.claims[0].id);
             if (data.claims[0].page) {
@@ -436,6 +677,7 @@ export default function Page() {
           break;
         case "done":
           setForecasterResponse(data.forecaster_response);
+          saveSession(claimsRef.current, data.forecaster_response);
           break;
         case "error":
           setErrorMsg(data.message);
@@ -584,30 +826,94 @@ export default function Page() {
 
           <div className={`flex-1 overflow-y-auto flex flex-col items-center bg-zinc-100 relative ${fileName && fileName.toLowerCase().endsWith('.pdf') ? 'p-0 overflow-hidden' : 'p-8'}`}>
             {!fileName ? (
-              <div className="max-w-md w-full border-2 border-dashed border-border rounded-lg bg-panel p-8 text-center flex flex-col items-center gap-4 shadow-sm my-auto">
-                <div className="w-12 h-12 bg-bg rounded-full flex items-center justify-center text-text-secondary border border-border">
-                  <Upload className="w-6 h-6" />
+              <div className="max-w-xl w-full flex flex-col gap-6 my-auto">
+                <div className="border-2 border-dashed border-border rounded-lg bg-panel p-8 text-center flex flex-col items-center gap-4 shadow-sm">
+                  <div className="w-12 h-12 bg-bg rounded-full flex items-center justify-center text-text-secondary border border-border">
+                    <Upload className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-semibold text-text-primary">No filing document loaded</h3>
+                    <p className="text-xs text-text-secondary mt-1">
+                      Upload an SEC report (PDF, CSV, MD, TXT) or load the sample file to run the auditing pipeline.
+                    </p>
+                  </div>
+                  <div className="flex flex-col sm:flex-row gap-2 w-full mt-2 justify-center max-w-sm">
+                    <button
+                      onClick={() => fileInputRef.current?.click()}
+                      className="flex-1 bg-accent-navy text-white text-xs font-semibold py-2.5 rounded-md hover:bg-opacity-90 transition-all cursor-pointer shadow-sm"
+                    >
+                      Select File to Upload
+                    </button>
+                    <button
+                      onClick={handleLoadSample}
+                      className="flex-1 border border-border bg-panel text-text-primary text-xs font-semibold py-2.5 rounded-md hover:bg-bg transition-all cursor-pointer shadow-sm"
+                    >
+                      Load Q4 2025 Sample
+                    </button>
+                  </div>
                 </div>
-                <div>
-                  <h3 className="text-sm font-semibold text-text-primary">No filing document loaded</h3>
-                  <p className="text-xs text-text-secondary mt-1">
-                    Upload an SEC report (PDF, CSV, MD, TXT) or load the sample file to run the auditing pipeline.
-                  </p>
-                </div>
-                <div className="flex flex-col gap-2 w-full mt-2">
-                  <button
-                    onClick={() => fileInputRef.current?.click()}
-                    className="w-full bg-accent-navy text-white text-xs font-semibold py-2.5 rounded-md hover:bg-opacity-90 transition-all cursor-pointer shadow-sm"
-                  >
-                    Select File to Upload
-                  </button>
-                  <button
-                    onClick={handleLoadSample}
-                    className="w-full border border-border bg-panel text-text-primary text-xs font-semibold py-2.5 rounded-md hover:bg-bg transition-all cursor-pointer shadow-sm"
-                  >
-                    Load Q4 2025 Sample Filing
-                  </button>
-                </div>
+
+                {recentSessions.length > 0 && (
+                  <div className="bg-panel border border-border rounded-lg p-5 shadow-sm">
+                    <div className="flex items-center justify-between border-b border-border/60 pb-2.5 mb-3">
+                      <h4 className="text-xs font-bold uppercase tracking-wider text-text-primary flex items-center gap-2 font-sans">
+                        <History className="w-3.5 h-3.5 text-accent-navy" />
+                        Recent Audits History
+                      </h4>
+                      <button
+                        onClick={() => {
+                          localStorage.removeItem("decimallens_sessions");
+                          setRecentSessions([]);
+                        }}
+                        className="text-[10px] text-red-600 hover:text-red-700 font-semibold transition-all cursor-pointer font-sans"
+                      >
+                        Clear History
+                      </button>
+                    </div>
+                    <div className="flex flex-col gap-2 max-h-[220px] overflow-y-auto">
+                      {recentSessions.map((session) => (
+                        <div
+                          key={session.id}
+                          onClick={() => {
+                            setFileName(session.fileName);
+                            setParsedText(session.parsedText);
+                            setLowConfidence(session.lowConfidence);
+                            setExtractedClaims(session.extractedClaims);
+                            claimsRef.current = session.extractedClaims;
+                            setForecasterResponse(session.forecasterResponse);
+                            if (session.extractedClaims.length > 0) {
+                              setSelectedClaimId(session.extractedClaims[0].id);
+                              setCurrentPage(session.extractedClaims[0].page || 1);
+                            }
+                          }}
+                          className="flex items-center justify-between p-3 bg-bg hover:bg-border/20 rounded-md border border-border/40 hover:border-border cursor-pointer transition-all"
+                        >
+                          <div className="flex items-center gap-2.5 overflow-hidden">
+                            <FileText className="w-4 h-4 text-accent-navy shrink-0" />
+                            <div className="flex flex-col min-w-0">
+                              <span className="font-mono text-xs text-text-primary truncate font-bold">{session.fileName}</span>
+                              <span className="text-[10px] text-text-secondary font-sans">{session.timestamp}</span>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2 shrink-0">
+                            <span className="text-[9px] uppercase px-1.5 py-0.5 rounded font-bold font-mono bg-[#E8F5E9] text-verified">
+                              {session.extractedClaims.filter(c => c.verified).length}/{session.extractedClaims.length} OK
+                            </span>
+                            {session.forecasterResponse && (
+                              <span className={`text-[9px] uppercase px-1.5 py-0.5 rounded font-bold font-mono ${
+                                session.forecasterResponse.confidence === "Low"
+                                  ? "bg-[#FEF3C7] text-flagged"
+                                  : "bg-[#E8F5E9] text-verified"
+                              }`}>
+                                {session.forecasterResponse.confidence}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             ) : fileName.toLowerCase().endsWith('.pdf') ? (
               /* Ingested PDF View */
@@ -801,110 +1107,280 @@ export default function Page() {
                     )}
 
                     {/* Claims list */}
-                    {extractedClaims.length > 0 ? (
+                    {extractedClaims.length > 0 || isAddingClaim ? (
                       <div className="flex flex-col gap-4">
-                        <div className="border border-border rounded-md overflow-hidden bg-panel shadow-sm">
-                          <table className="w-full border-collapse text-left text-xs">
-                            <thead>
-                              {claimsTable.getHeaderGroups().map(headerGroup => (
-                                <tr key={headerGroup.id} className="bg-bg border-b border-border">
-                                  {headerGroup.headers.map(header => (
-                                    <th 
-                                      key={header.id} 
-                                      onClick={header.column.getToggleSortingHandler()}
-                                      className="p-3 text-[10px] uppercase font-bold text-text-secondary tracking-wider cursor-pointer hover:bg-slate-200/50 transition-all select-none"
-                                    >
-                                      <div className="flex items-center gap-1">
-                                        {flexRender(header.column.columnDef.header, header.getContext())}
-                                        {{
-                                          asc: ' ▴',
-                                          desc: ' ▾',
-                                        }[header.column.getIsSorted() as string] ?? null}
-                                      </div>
-                                    </th>
-                                  ))}
-                                </tr>
-                              ))}
-                            </thead>
-                            <tbody className="divide-y divide-border/60">
-                              {claimsTable.getRowModel().rows.map(row => {
-                                const isSelected = row.original.id === selectedClaimId;
-                                return (
-                                  <tr 
-                                    key={row.id}
-                                    onClick={() => handleSelectClaim(row.original.id)}
-                                    className={`cursor-pointer transition-all hover:bg-bg/40 ${
-                                      isSelected 
-                                        ? "bg-slate-100/80 font-medium border-l-2 border-accent-navy" 
-                                        : row.original.verified
-                                          ? "bg-panel"
-                                          : "bg-flagged-bg/5 hover:bg-flagged-bg/10"
-                                    }`}
-                                  >
-                                    {row.getVisibleCells().map(cell => (
-                                      <td key={cell.id} className="p-3 max-w-[200px] truncate">
-                                        {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                                      </td>
+                        {extractedClaims.length > 0 && (
+                          <div className="border border-border rounded-md overflow-hidden bg-panel shadow-sm">
+                            <table className="w-full border-collapse text-left text-xs">
+                              <thead>
+                                {claimsTable.getHeaderGroups().map(headerGroup => (
+                                  <tr key={headerGroup.id} className="bg-bg border-b border-border">
+                                    {headerGroup.headers.map(header => (
+                                      <th 
+                                        key={header.id} 
+                                        onClick={header.column.getToggleSortingHandler()}
+                                        className="p-3 text-[10px] uppercase font-bold text-text-secondary tracking-wider cursor-pointer hover:bg-slate-200/50 transition-all select-none"
+                                      >
+                                        <div className="flex items-center gap-1">
+                                          {flexRender(header.column.columnDef.header, header.getContext())}
+                                          {{
+                                            asc: ' ▴',
+                                            desc: ' ▾',
+                                          }[header.column.getIsSorted() as string] ?? null}
+                                        </div>
+                                      </th>
                                     ))}
                                   </tr>
-                                );
-                              })}
-                            </tbody>
-                          </table>
-                        </div>
+                                ))}
+                              </thead>
+                              <tbody className="divide-y divide-border/60">
+                                {claimsTable.getRowModel().rows.map(row => {
+                                  const isSelected = row.original.id === selectedClaimId;
+                                  return (
+                                    <tr 
+                                      key={row.id}
+                                      onClick={() => handleSelectClaim(row.original.id)}
+                                      className={`cursor-pointer transition-all hover:bg-bg/40 ${
+                                        isSelected 
+                                          ? "bg-slate-100/80 font-medium border-l-2 border-accent-navy" 
+                                          : row.original.verified
+                                            ? "bg-panel"
+                                            : "bg-flagged-bg/5 hover:bg-flagged-bg/10"
+                                      }`}
+                                    >
+                                      {row.getVisibleCells().map(cell => (
+                                        <td key={cell.id} className="p-3 max-w-[200px] truncate">
+                                          {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                                        </td>
+                                      ))}
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
 
-                        {/* Active Claim Detail Panel */}
-                        {activeClaim && (
+                        {extractedClaims.length > 0 && !isAddingClaim && (
+                          <div className="flex justify-end mt-1">
+                            <button
+                              onClick={() => {
+                                setEditMetric("");
+                                setEditReported("");
+                                setEditFormula("");
+                                setEditExpression("");
+                                setEditPage(1);
+                                setEditContext("");
+                                setIsAddingClaim(true);
+                                setIsEditingClaim(false);
+                                setSelectedClaimId(null);
+                              }}
+                              className="flex items-center gap-1.5 text-xs text-accent-navy hover:text-opacity-80 font-semibold border border-accent-navy/20 hover:border-accent-navy px-3 py-1.5 rounded bg-panel transition-all cursor-pointer font-sans font-semibold"
+                            >
+                              + Add Custom Claim
+                            </button>
+                          </div>
+                        )}
+
+                        {/* Active Claim Detail or Edit/Add Form Panel */}
+                        {(isAddingClaim || isEditingClaim || activeClaim) && (
                           <motion.div
                             layout
                             initial={{ opacity: 0, y: 5 }}
                             animate={{ opacity: 1, y: 0 }}
                             className={`border rounded-md p-4 bg-panel ${
-                              activeClaim.verified ? "border-border" : "border-flagged/30 bg-flagged-bg/5"
+                              (isAddingClaim || isEditingClaim) 
+                                ? "border-accent-navy/40" 
+                                : activeClaim?.verified 
+                                  ? "border-border" 
+                                  : "border-flagged/30 bg-flagged-bg/5"
                             }`}
                           >
-                            <div className="flex justify-between items-center border-b border-border/60 pb-2 mb-3">
-                              <h4 className="text-xs font-bold text-text-primary font-sans">
-                                Claim Details (Page {activeClaim.page})
-                              </h4>
-                              <span className="font-mono text-[10px] text-text-secondary">
-                                {activeClaim.id.toUpperCase()}
-                              </span>
-                            </div>
-                            
-                            <div className="flex flex-col gap-3 text-xs">
-                              <div>
-                                <span className="text-[10px] uppercase tracking-wider text-text-secondary block">Reported Value</span>
-                                <div className="font-mono font-bold text-text-primary text-[13px] mt-0.5">
-                                  {activeClaim.reported}
+                            {(isAddingClaim || isEditingClaim) ? (
+                              /* Edit / Add Claim Form */
+                              <form onSubmit={handleSaveClaim} className="flex flex-col gap-4 text-xs">
+                                <div className="flex justify-between items-center border-b border-border/60 pb-2 mb-1">
+                                  <h4 className="text-xs font-bold text-text-primary font-sans">
+                                    {isAddingClaim ? "Add Custom Claim" : `Edit Claim ${activeClaim?.id.toUpperCase()}`}
+                                  </h4>
+                                  <span className="text-[10px] text-text-secondary font-mono">Workspace Edit</span>
                                 </div>
-                              </div>
-                              <div>
-                                <span className="text-[10px] uppercase tracking-wider text-text-secondary block">Formula Check</span>
-                                <div className="font-mono text-text-primary bg-bg px-2 py-1.5 rounded border border-border mt-1 whitespace-pre-wrap break-all leading-relaxed">
-                                  {activeClaim.formula}
+
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                  <div>
+                                    <label className="text-[10px] uppercase tracking-wider text-text-secondary font-semibold block mb-1">Metric Name</label>
+                                    <input
+                                      type="text"
+                                      value={editMetric}
+                                      onChange={(e) => setEditMetric(e.target.value)}
+                                      placeholder="e.g. Gross Margin (FY 2025)"
+                                      className="w-full border border-border rounded px-2.5 py-1.5 outline-none focus:border-accent-navy text-xs font-sans bg-bg text-text-primary"
+                                      required
+                                    />
+                                  </div>
+                                  <div>
+                                    <label className="text-[10px] uppercase tracking-wider text-text-secondary font-semibold block mb-1">Reported Value</label>
+                                    <input
+                                      type="text"
+                                      value={editReported}
+                                      onChange={(e) => setEditReported(e.target.value)}
+                                      placeholder="e.g. $142,500,000 or 24.50%"
+                                      className="w-full border border-border rounded px-2.5 py-1.5 outline-none focus:border-accent-navy text-xs font-mono bg-bg text-text-primary"
+                                      required
+                                    />
+                                  </div>
                                 </div>
-                              </div>
-                              <div>
-                                <span className="text-[10px] uppercase tracking-wider text-text-secondary block">Filing Citation Context</span>
-                                <div className="text-text-secondary italic mt-1 bg-slate-50 border border-slate-100 p-2.5 rounded leading-relaxed text-[11px]">
-                                  {"\""}{activeClaim.context}{"\""}
+
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                  <div>
+                                    <label className="text-[10px] uppercase tracking-wider text-text-secondary font-semibold block mb-1">Formula Check Description</label>
+                                    <input
+                                      type="text"
+                                      value={editFormula}
+                                      onChange={(e) => setEditFormula(e.target.value)}
+                                      placeholder="e.g. Revenue - COGS"
+                                      className="w-full border border-border rounded px-2.5 py-1.5 outline-none focus:border-accent-navy text-xs font-sans bg-bg text-text-primary"
+                                    />
+                                  </div>
+                                  <div>
+                                    <label className="text-[10px] uppercase tracking-wider text-text-secondary font-semibold block mb-1">Math Expression (for Python evaluation)</label>
+                                    <input
+                                      type="text"
+                                      value={editExpression}
+                                      onChange={(e) => setEditExpression(e.target.value)}
+                                      placeholder="e.g. 142500000 - 80400000"
+                                      className="w-full border border-border rounded px-2.5 py-1.5 outline-none focus:border-accent-navy text-xs font-mono bg-bg text-text-primary"
+                                      required
+                                    />
+                                  </div>
                                 </div>
-                              </div>
-                              
-                              {!activeClaim.verified && activeClaim.reason && (
-                                <div className="bg-flagged-bg/30 border border-flagged/10 rounded p-3 text-[11px] text-[#9A3412] leading-relaxed mt-1">
-                                  <strong>Auditor Notice:</strong> {activeClaim.reason}
+
+                                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                                  <div className="sm:col-span-1">
+                                    <label className="text-[10px] uppercase tracking-wider text-text-secondary font-semibold block mb-1">Page Number</label>
+                                    <input
+                                      type="number"
+                                      value={editPage}
+                                      onChange={(e) => setEditPage(Number(e.target.value))}
+                                      className="w-full border border-border rounded px-2.5 py-1.5 outline-none focus:border-accent-navy text-xs font-mono bg-bg text-text-primary"
+                                      min={1}
+                                      required
+                                    />
+                                  </div>
+                                  <div className="sm:col-span-2">
+                                    <label className="text-[10px] uppercase tracking-wider text-text-secondary font-semibold block mb-1">Filing Citation Context</label>
+                                    <input
+                                      type="text"
+                                      value={editContext}
+                                      onChange={(e) => setEditContext(e.target.value)}
+                                      placeholder="The textual context containing the claim..."
+                                      className="w-full border border-border rounded px-2.5 py-1.5 outline-none focus:border-accent-navy text-xs font-sans bg-bg text-text-primary"
+                                    />
+                                  </div>
                                 </div>
-                              )}
-                            </div>
+
+                                <div className="flex justify-end gap-2 mt-2 pt-2 border-t border-border/40">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setIsEditingClaim(false);
+                                      setIsAddingClaim(false);
+                                      if (extractedClaims.length > 0) {
+                                        setSelectedClaimId(extractedClaims[0].id);
+                                      }
+                                    }}
+                                    className="px-3.5 py-1.5 rounded border border-border bg-panel text-text-primary hover:bg-bg transition-all font-semibold cursor-pointer"
+                                  >
+                                    Cancel
+                                  </button>
+                                  <button
+                                    type="submit"
+                                    className="px-4 py-1.5 rounded bg-accent-navy text-white hover:bg-opacity-90 transition-all font-semibold shadow-sm cursor-pointer"
+                                  >
+                                    Save & Re-verify
+                                  </button>
+                                </div>
+                              </form>
+                            ) : (
+                              /* Read-Only Details Panel with Edit/Delete Buttons */
+                              <>
+                                <div className="flex justify-between items-center border-b border-border/60 pb-2 mb-3">
+                                  <h4 className="text-xs font-bold text-text-primary font-sans">
+                                    Claim Details (Page {activeClaim!.page})
+                                  </h4>
+                                  <span className="font-mono text-[10px] text-text-secondary">
+                                    {activeClaim!.id.toUpperCase()}
+                                  </span>
+                                </div>
+                                
+                                <div className="flex flex-col gap-3 text-xs">
+                                  <div>
+                                    <span className="text-[10px] uppercase tracking-wider text-text-secondary block">Reported Value</span>
+                                    <div className="font-mono font-bold text-text-primary text-[13px] mt-0.5">
+                                      {activeClaim!.reported}
+                                    </div>
+                                  </div>
+                                  <div>
+                                    <span className="text-[10px] uppercase tracking-wider text-text-secondary block">Formula Check</span>
+                                    <div className="font-mono text-text-primary bg-bg px-2 py-1.5 rounded border border-border mt-1 whitespace-pre-wrap break-all leading-relaxed">
+                                      {activeClaim!.formula}
+                                    </div>
+                                  </div>
+                                  <div>
+                                    <span className="text-[10px] uppercase tracking-wider text-text-secondary block">Filing Citation Context</span>
+                                    <div className="text-text-secondary italic mt-1 bg-slate-50 border border-slate-100 p-2.5 rounded leading-relaxed text-[11px]">
+                                      {"\""}{activeClaim!.context}{"\""}
+                                    </div>
+                                  </div>
+                                  
+                                  {!activeClaim!.verified && activeClaim!.reason && (
+                                    <div className="bg-flagged-bg/30 border border-flagged/10 rounded p-3 text-[11px] text-[#9A3412] leading-relaxed mt-1">
+                                      <strong>Auditor Notice:</strong> {activeClaim!.reason}
+                                    </div>
+                                  )}
+
+                                  <div className="flex justify-end gap-2 mt-2 pt-2 border-t border-border/40">
+                                    <button
+                                      type="button"
+                                      onClick={() => handleDeleteClaim(activeClaim!.id)}
+                                      className="px-3 py-1.5 rounded border border-red-200 text-red-600 bg-panel hover:bg-red-50 transition-all font-semibold cursor-pointer text-[11px]"
+                                    >
+                                      Delete Claim
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={handleStartEdit}
+                                      className="px-4 py-1.5 rounded bg-accent-navy text-white hover:bg-opacity-90 transition-all font-semibold shadow-sm cursor-pointer text-[11px]"
+                                    >
+                                      Edit Claim
+                                    </button>
+                                  </div>
+                                </div>
+                              </>
+                            )}
                           </motion.div>
                         )}
                       </div>
                     ) : (
                       !isAnalyzing && (
-                        <div className="py-12 text-center text-xs text-text-secondary">
-                          No claims extracted. Ensure your PDF has parseable financial data.
+                        <div className="py-12 text-center text-xs text-text-secondary flex flex-col items-center gap-3">
+                          <p className="font-sans">No claims extracted. Ensure your PDF has parseable financial data.</p>
+                          <button
+                            onClick={() => {
+                              setEditMetric("");
+                              setEditReported("");
+                              setEditFormula("");
+                              setEditExpression("");
+                              setEditPage(1);
+                              setEditContext("");
+                              setIsAddingClaim(true);
+                              setIsEditingClaim(false);
+                              setSelectedClaimId(null);
+                            }}
+                            className="flex items-center gap-1.5 text-xs text-accent-navy hover:text-opacity-80 font-semibold border border-accent-navy/20 hover:border-accent-navy px-3 py-1.5 rounded bg-panel transition-all cursor-pointer font-sans"
+                          >
+                            + Add Custom Claim Manually
+                          </button>
                         </div>
                       )
                     )}
@@ -926,14 +1402,25 @@ export default function Page() {
                         </p>
                       </div>
                       
-                      {forecasterText && (
-                        <button
-                          onClick={() => setShowRawForecaster(!showRawForecaster)}
-                          className="text-[10px] text-text-secondary hover:text-text-primary border border-border bg-panel px-2 py-1 rounded transition-all cursor-pointer font-sans"
-                        >
-                          {showRawForecaster ? "Hide Stream JSON" : "Show Stream JSON"}
-                        </button>
-                      )}
+                      <div className="flex gap-2">
+                        {forecasterText && (
+                          <button
+                            onClick={() => setShowRawForecaster(!showRawForecaster)}
+                            className="text-[10px] text-text-secondary hover:text-text-primary border border-border bg-panel px-2 py-1 rounded transition-all cursor-pointer font-sans"
+                          >
+                            {showRawForecaster ? "Hide JSON" : "Show JSON"}
+                          </button>
+                        )}
+                        {extractedClaims.length > 0 && (
+                          <button
+                            disabled={isAnalyzing}
+                            onClick={() => runForecastStream(extractedClaims)}
+                            className="text-[10px] text-white bg-accent-navy hover:bg-opacity-95 disabled:bg-opacity-50 px-2.5 py-1 rounded transition-all cursor-pointer font-sans font-semibold"
+                          >
+                            Re-run Projections
+                          </button>
+                        )}
+                      </div>
                     </div>
 
                     {extractedClaims.length === 0 ? (
