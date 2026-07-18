@@ -1,26 +1,141 @@
 @import "tailwindcss";
-
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
 
 @theme inline {
+  /* Default font custom mappings */
+  --font-sans: var(--font-inter), sans-serif;
+  --font-mono: var(--font-ibm-plex-mono), monospace;
+
+  /* Shadcn color mappings */
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  /* Decimallens specific brand mappings */
+  --color-bg: var(--bg);
+  --color-panel: var(--panel);
+  --color-text-primary: var(--text-primary);
+  --color-text-secondary: var(--text-secondary);
+  --color-accent-navy: var(--accent-navy);
+  --color-verified: var(--verified);
+  --color-flagged: var(--flagged);
+  --color-flagged-bg: var(--flagged-bg);
+
+  /* Spacing and borders */
+  --radius-lg: var(--radius);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-sm: calc(var(--radius) * 0.6);
+
+  /* Keyframe animations */
+  --animate-citation-flash: citation-flash 0.4s ease-out;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+:root {
+  /* Shadcn variables mapped to our design tokens */
+  --background: #F7F8FA;
+  --foreground: #0F172A;
+  --card: #FFFFFF;
+  --card-foreground: #0F172A;
+  --popover: #FFFFFF;
+  --popover-foreground: #0F172A;
+  --primary: #1E3A5F;
+  --primary-foreground: #FFFFFF;
+  --secondary: #F1F5F9;
+  --secondary-foreground: #0F172A;
+  --muted: #F1F5F9;
+  --muted-foreground: #64748B;
+  --accent: #F1F5F9;
+  --accent-foreground: #0F172A;
+  --destructive: #EF4444;
+  --destructive-foreground: #FFFFFF;
+  --border: #E2E8F0;
+  --input: #E2E8F0;
+  --ring: #1E3A5F;
+  --radius: 0.375rem; /* 6px as per design specs */
+
+  /* Project Design Tokens */
+  --bg: #F7F8FA;
+  --panel: #FFFFFF;
+  --text-primary: #0F172A;
+  --text-secondary: #64748B;
+  --accent-navy: #1E3A5F;
+  --verified: #15803D;
+  --flagged: #B45309;
+  --flagged-bg: #FEF3C7;
+}
+
+@keyframes citation-flash {
+  0% {
+    background-color: var(--flagged-bg);
+  }
+  100% {
+    background-color: transparent;
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+/* Base resets & layout options */
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground font-sans;
+    background-color: var(--bg);
+    color: var(--text-primary);
+  }
+  html {
+    @apply font-sans;
+  }
+}
+
+/* Force tabular numerals for all monospace elements */
+.font-mono, [class*='font-mono'] {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Custom layout shell classes */
+.two-pane-container {
+  display: grid;
+  grid-template-columns: 45fr 55fr;
+  height: calc(100vh - 3.5rem);
+  overflow: hidden;
+  background-color: var(--bg);
+}
+
+@media (max-width: 1024px) {
+  .two-pane-container {
+    grid-template-columns: 1fr;
+    height: auto;
+    overflow: auto;
+  }
+}
+
+.pane {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow-y: auto;
+  background-color: var(--panel);
+  border-right: 1px solid var(--border);
+}
+
+.pane:last-child {
+  border-right: none;
 }
