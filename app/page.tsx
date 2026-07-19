@@ -769,13 +769,17 @@ export default function Page() {
     
     const interval = setInterval(() => {
       setProgress((prev) => {
+        if (!isAnalyzing && targetProgress >= 100) {
+          return 100;
+        }
         if (prev < targetProgress) {
           const diff = targetProgress - prev;
           const step = Math.max(1, Math.min(5, Math.ceil(diff / 8)));
           return Math.min(targetProgress, prev + step);
-        } else if (prev < 99 && isAnalyzing) {
-          // Slow creep if target reached but still analyzing
-          return prev + 0.2;
+        } else if (isAnalyzing && prev < 98) {
+          // Asymptotic crawl towards 98% while still analyzing
+          const remaining = 98 - prev;
+          return prev + Math.max(0.05, remaining * 0.04);
         }
         return prev;
       });
@@ -941,14 +945,52 @@ export default function Page() {
                 // Save updated session
                 saveSession(claims, data.forecaster_response);
                 setTargetProgress(100);
+                setProgress(100);
               } else if (eventType === "error") {
                 setErrorMsg(data.message);
                 setShowLoadingOverlay(false);
                 setProgress(0);
+                setTargetProgress(0);
               }
             } catch (e) {
               console.error("Failed to parse SSE event data:", e, eventData);
             }
+          }
+        }
+      }
+
+      // Flush remaining buffer if stream ended without trailing \n\n
+      if (buffer.trim()) {
+        const lines = buffer.split("\n");
+        let eventType = "";
+        let eventData = "";
+        for (const line of lines) {
+          if (line.startsWith("event:")) {
+            eventType = line.replace("event:", "").trim();
+          } else if (line.startsWith("data:")) {
+            eventData = line.replace("data:", "").trim();
+          }
+        }
+        if (eventType && eventData) {
+          try {
+            const data = JSON.parse(eventData);
+            if (eventType === "status") {
+              setStatusText(data.status);
+            } else if (eventType === "forecaster_chunk") {
+              setForecasterText((prev) => prev + data.chunk);
+            } else if (eventType === "done") {
+              setForecasterResponse(data.forecaster_response);
+              saveSession(claims, data.forecaster_response);
+              setTargetProgress(100);
+              setProgress(100);
+            } else if (eventType === "error") {
+              setErrorMsg(data.message);
+              setShowLoadingOverlay(false);
+              setProgress(0);
+              setTargetProgress(0);
+            }
+          } catch (e) {
+            console.error("Failed to parse trailing SSE event data:", e, buffer);
           }
         }
       }
@@ -957,10 +999,12 @@ export default function Page() {
       setErrorMsg((err as Error).message || "Error running forecast stream.");
       setShowLoadingOverlay(false);
       setProgress(0);
+      setTargetProgress(0);
     } finally {
       setIsAnalyzing(false);
       setStatusText("");
       setTargetProgress(100);
+      setProgress((prev) => (prev > 0 ? 100 : 0));
     }
   };
 
@@ -1346,6 +1390,23 @@ export default function Page() {
           }
         }
       }
+
+      // Flush remaining buffer if stream ended without trailing \n\n
+      if (buffer.trim()) {
+        const lines = buffer.split("\n");
+        let eventType = "";
+        let eventData = "";
+        for (const line of lines) {
+          if (line.startsWith("event:")) {
+            eventType = line.replace("event:", "").trim();
+          } else if (line.startsWith("data:")) {
+            eventData = line.replace("data:", "").trim();
+          }
+        }
+        if (eventType && eventData) {
+          handleSSEEvent(eventType, eventData);
+        }
+      }
     } catch (err) {
       console.error(err);
       const rawMsg = (err as Error).message || "";
@@ -1357,10 +1418,12 @@ export default function Page() {
       );
       setShowLoadingOverlay(false);
       setProgress(0);
+      setTargetProgress(0);
     } finally {
       setIsAnalyzing(false);
       setStatusText("");
       setTargetProgress(100);
+      setProgress((prev) => (prev > 0 ? 100 : 0));
     }
   };
 
@@ -1397,11 +1460,13 @@ export default function Page() {
           setForecasterResponse(data.forecaster_response);
           saveSession(claimsRef.current, data.forecaster_response);
           setTargetProgress(100);
+          setProgress(100);
           break;
         case "error":
           setErrorMsg(data.message);
           setShowLoadingOverlay(false);
           setProgress(0);
+          setTargetProgress(0);
           break;
         default:
           break;
