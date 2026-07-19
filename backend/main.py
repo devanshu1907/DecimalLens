@@ -95,7 +95,7 @@ async def rate_limit_middleware(request: Request, call_next):
 # Defaults to localhost:3000 for local development.
 _allowed_origins = [
     o.strip()
-    for o in os.environ.get("ALLOWED_ORIGINS", "http://localhost:3000").split(",")
+    for o in os.environ.get("ALLOWED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001,http://127.0.0.1:3001").split(",")
     if o.strip()
 ]
 app.add_middleware(
@@ -276,7 +276,15 @@ async def get_document(filename: str):
         raise HTTPException(status_code=403, detail="Access denied")
 
     if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="Document not found")
+        # Fallback search for UUID-prefixed file if exact name not found
+        matching_files = [
+            f for f in os.listdir(UPLOAD_DIR) 
+            if f.endswith(f"_{safe_filename}") or f == safe_filename
+        ]
+        if matching_files:
+            file_path = os.path.join(UPLOAD_DIR, matching_files[0])
+        else:
+            raise HTTPException(status_code=404, detail="Document not found")
 
     ext = safe_filename.rsplit('.', 1)[-1].lower()
     if ext not in ALLOWED_EXTENSIONS:

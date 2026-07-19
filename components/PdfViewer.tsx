@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import { Document, Page, pdfjs } from "react-pdf";
 import { ChevronLeft, ChevronRight, Loader2, ZoomIn, ZoomOut } from "lucide-react";
 
@@ -8,9 +8,8 @@ import { ChevronLeft, ChevronRight, Loader2, ZoomIn, ZoomOut } from "lucide-reac
 import "react-pdf/dist/Page/AnnotationLayer.css";
 import "react-pdf/dist/Page/TextLayer.css";
 
-// Configure worker: served from /public to avoid CDN supply-chain risk.
-// Run `node -e "require('fs').copyFileSync(require.resolve('pdfjs-dist/build/pdf.worker.min.mjs'), 'public/pdf.worker.min.mjs')"` after install.
-pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
+// Configure worker: use unpkg CDN matching the exact pdfjs version installed
+pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
 
 interface PdfViewerProps {
   url: string;
@@ -23,6 +22,12 @@ export default function PdfViewer({ url, currentPage, onPageChange, highlightTex
   const [numPages, setNumPages] = useState<number | null>(null);
   const [pageNumber, setPageNumber] = useState<number>(currentPage || 1);
   const [scale, setScale] = useState<number>(1.0);
+
+  const pdfOptions = useMemo(() => ({
+    cMapUrl: `https://unpkg.com/pdfjs-dist@${pdfjs.version}/cmaps/`,
+    cMapPacked: true,
+    standardFontDataUrl: `https://unpkg.com/pdfjs-dist@${pdfjs.version}/standard_fonts/`,
+  }), []);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = useState<number | undefined>(undefined);
@@ -159,6 +164,7 @@ export default function PdfViewer({ url, currentPage, onPageChange, highlightTex
         <div className="bg-panel border border-border shadow-md rounded-md overflow-hidden h-fit transition-transform duration-150 ease-out">
           <Document
             file={url}
+            options={pdfOptions}
             onLoadSuccess={onDocumentLoadSuccess}
             loading={
               <div className="flex flex-col items-center justify-center gap-3 p-16 min-h-[400px]">
